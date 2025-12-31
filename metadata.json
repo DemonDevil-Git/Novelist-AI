@@ -1,0 +1,5 @@
+{
+  "name": "Novelist AI",
+  "description": "A distraction-free writing environment for novelists featuring a Zen mode for focus and a Creative mode for AI-powered illustration generation using Gemini.",
+  "requestFramePermissions": []
+}
