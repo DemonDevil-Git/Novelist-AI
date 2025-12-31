@@ -41,7 +41,7 @@ const Editor: React.FC<EditorProps> = ({
   // Zen Mode: Tighter width (2xl), more vertical padding, no border/shadow
   // Editor/Creative: Standard width (3xl), card-like appearance
   const containerClass = mode === AppMode.ZEN 
-    ? "max-w-2xl mx-auto py-32 px-8 transition-all duration-1000 ease-in-out" 
+    ? "max-w-4xl mx-auto py-32 px-8 transition-all duration-1000 ease-in-out" 
     : "max-w-3xl mx-auto px-16 py-16 transition-all duration-700 ease-in-out bg-white shadow-sm min-h-[calc(100vh-8rem)] my-8 rounded-xl border border-stone-100";
 
   // Base styling + User Configurable Settings
