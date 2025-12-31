@@ -1,16 +1,18 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { AppMode, Illustration, Chapter, EditorSettings } from './types';
 import Editor from './components/Editor';
 import IllustrationPanel from './components/IllustrationPanel';
 import ChapterSidebar from './components/ChapterSidebar';
 import FormatToolbar from './components/FormatToolbar';
-import { generateNovelIllustration } from './services/geminiService';
-import { Feather, Minimize2 } from 'lucide-react';
+import { generateNovelIllustration, generateChapterTitle } from './services/geminiService';
+import { Feather, Minimize2, Undo2, Redo2, Download, Cloud } from 'lucide-react';
+
+const STORAGE_KEY = 'novelist-ai-chapters';
 
 const App: React.FC = () => {
   const [mode, setMode] = useState<AppMode>(AppMode.EDITOR);
   
-  // Chapter State
+  // Chapter State with History for Undo/Redo
   const [chapters, setChapters] = useState<Chapter[]>([
     {
       id: '1',
@@ -22,6 +24,11 @@ Tonight was different. The storm wasn't just wind and rain; there was a peculiar
 He reached the lantern room and froze. The great glass lens was already rotating, but the light it cast wasn't the warm yellow beam he knew. It was a piercing violet that seemed to cut through reality itself.`
     }
   ]);
+
+  const [history, setHistory] = useState<Chapter[][]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const historyTimeoutRef = useRef<number | null>(null);
   
   const [activeChapterId, setActiveChapterId] = useState<string | null>('1');
 
@@ -36,11 +43,89 @@ He reached the lantern room and froze. The great glass lens was already rotating
   const [selectedText, setSelectedText] = useState<string>('');
   const [illustrations, setIllustrations] = useState<Illustration[]>([]);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  
+  // AI Title Generation State
+  const [isGeneratingTitleFor, setIsGeneratingTitleFor] = useState<string | null>(null);
 
-  // --- Handlers ---
+  // --- Initialization & Auto-Save ---
+
+  // Load from local storage
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+            setChapters(parsed);
+            setHistory([parsed]);
+            setHistoryIndex(0);
+            setActiveChapterId(parsed[0].id);
+        }
+      } catch (e) {
+        console.error("Failed to load saved chapters", e);
+      }
+    } else {
+        // Initialize history with default state
+        setHistory([chapters]);
+        setHistoryIndex(0);
+    }
+  }, []);
+
+  // Save to local storage (Auto-save)
+  useEffect(() => {
+    const handler = setTimeout(() => {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
+        setLastSaved(new Date());
+    }, 1000); // Auto-save after 1 second of inactivity
+
+    return () => clearTimeout(handler);
+  }, [chapters]);
+
+  // --- History Management (Undo/Redo) ---
+  
+  const pushToHistory = (newChapters: Chapter[]) => {
+    // Debounce history updates to avoid saving every keystroke as a separate step
+    if (historyTimeoutRef.current) {
+        clearTimeout(historyTimeoutRef.current);
+    }
+
+    historyTimeoutRef.current = window.setTimeout(() => {
+        const newHistory = history.slice(0, historyIndex + 1);
+        newHistory.push(newChapters);
+        
+        // Limit history size to 50 steps
+        if (newHistory.length > 50) {
+            newHistory.shift();
+        } else {
+            setHistoryIndex(newHistory.length - 1);
+        }
+        
+        setHistory(newHistory);
+    }, 800); 
+  };
+
+  const undo = () => {
+    if (historyIndex > 0) {
+      const newIndex = historyIndex - 1;
+      setHistoryIndex(newIndex);
+      setChapters(history[newIndex]);
+    }
+  };
+
+  const redo = () => {
+    if (historyIndex < history.length - 1) {
+      const newIndex = historyIndex + 1;
+      setHistoryIndex(newIndex);
+      setChapters(history[newIndex]);
+    }
+  };
+
+  // --- Content Handlers ---
 
   const updateChapter = (id: string, field: keyof Chapter, value: string) => {
-    setChapters(prev => prev.map(ch => ch.id === id ? { ...ch, [field]: value } : ch));
+    const newChapters = chapters.map(ch => ch.id === id ? { ...ch, [field]: value } : ch);
+    setChapters(newChapters);
+    pushToHistory(newChapters);
   };
 
   const addChapter = () => {
@@ -50,16 +135,29 @@ He reached the lantern room and froze. The great glass lens was already rotating
       title: `Chapter ${chapters.length + 1}`,
       content: ''
     };
-    setChapters([...chapters, newChapter]);
-    // Scroll to new chapter logic is handled by UI interaction usually, 
-    // but we can set active to help highlighting
+    const newChapters = [...chapters, newChapter];
+    setChapters(newChapters);
+    
+    // Immediate push to history for structural changes
+    const newHistory = history.slice(0, historyIndex + 1);
+    newHistory.push(newChapters);
+    setHistory(newHistory);
+    setHistoryIndex(newHistory.length - 1);
+
     setActiveChapterId(newId);
     setTimeout(() => scrollToChapter(newId), 100);
   };
 
   const deleteChapter = (id: string) => {
-    if (chapters.length <= 1) return; // Prevent deleting last chapter
-    setChapters(prev => prev.filter(ch => ch.id !== id));
+    if (chapters.length <= 1) return;
+    const newChapters = chapters.filter(ch => ch.id !== id);
+    setChapters(newChapters);
+
+    // Immediate push to history
+    const newHistory = history.slice(0, historyIndex + 1);
+    newHistory.push(newChapters);
+    setHistory(newHistory);
+    setHistoryIndex(newHistory.length - 1);
   };
 
   const scrollToChapter = (id: string) => {
@@ -75,9 +173,29 @@ He reached the lantern room and froze. The great glass lens was already rotating
   };
 
   const toggleMode = (newMode: AppMode) => {
-    if (mode === newMode) return; // No op
+    if (mode === newMode) return; 
     setMode(newMode);
   };
+
+  // --- Export ---
+  const handleExportMarkdown = () => {
+    let mdContent = `# Novelist AI Export\n\n`;
+    chapters.forEach(ch => {
+        mdContent += `## ${ch.title}\n\n${ch.content}\n\n`;
+    });
+    
+    const blob = new Blob([mdContent], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'novel_export.md';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // --- Creative Handlers ---
 
   const handleSelectionChange = useCallback((text: string) => {
     setSelectedText(text);
@@ -103,19 +221,66 @@ He reached the lantern room and froze. The great glass lens was already rotating
     }
   };
 
+  const handleGenerateTitle = async (chapterId: string) => {
+    const chapter = chapters.find(c => c.id === chapterId);
+    if (!chapter) return;
+    
+    if (chapter.content.length < 50) {
+        alert("Chapter content is too short to generate a title. Write a bit more first!");
+        return;
+    }
+
+    setIsGeneratingTitleFor(chapterId);
+    try {
+        const newTitle = await generateChapterTitle(chapter.content);
+        updateChapter(chapterId, 'title', newTitle);
+    } catch (e) {
+        alert("Could not generate title. Try again.");
+    } finally {
+        setIsGeneratingTitleFor(null);
+    }
+  };
+
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#fcfaf7] text-gray-900 font-sans">
       
-      {/* Top Bar - Hidden in Zen, Visible in Creative/Editor */}
+      {/* Top Bar */}
       <header 
         className={`flex items-center justify-between px-6 py-3 border-b border-stone-200 bg-white transition-all duration-500 z-30
           ${mode === AppMode.ZEN ? '-mt-16 opacity-0' : 'mt-0 opacity-100 shadow-sm'}`}
       >
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-stone-900 rounded-lg flex items-center justify-center text-white">
-            <Feather size={18} />
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-stone-900 rounded-lg flex items-center justify-center text-white shadow-md">
+                <Feather size={18} />
+            </div>
+            <h1 className="text-lg font-bold tracking-tight text-stone-800 hidden md:block">Novelist AI</h1>
           </div>
-          <h1 className="text-lg font-bold tracking-tight text-stone-800">Novelist AI</h1>
+          
+          {/* Action Buttons */}
+          <div className="flex items-center gap-1 border-l border-stone-200 pl-4">
+             <button onClick={undo} disabled={historyIndex <= 0} className="p-2 text-stone-500 hover:bg-stone-100 rounded-md disabled:opacity-30 transition-colors" title="Undo">
+                <Undo2 size={18} />
+             </button>
+             <button onClick={redo} disabled={historyIndex >= history.length - 1} className="p-2 text-stone-500 hover:bg-stone-100 rounded-md disabled:opacity-30 transition-colors" title="Redo">
+                <Redo2 size={18} />
+             </button>
+             <button onClick={handleExportMarkdown} className="p-2 text-stone-500 hover:bg-stone-100 rounded-md transition-colors" title="Export Markdown">
+                <Download size={18} />
+             </button>
+          </div>
+        </div>
+
+        {/* Status Indicator */}
+        <div className="flex items-center gap-2 text-xs font-medium text-stone-400">
+             {lastSaved ? (
+                 <>
+                    <Cloud size={14} />
+                    <span>Saved {lastSaved.toLocaleTimeString()}</span>
+                 </>
+             ) : (
+                 <span>Unsaved</span>
+             )}
         </div>
         
         <div className="flex items-center gap-4">
@@ -159,6 +324,8 @@ He reached the lantern room and froze. The great glass lens was already rotating
               onAddChapter={addChapter}
               onDeleteChapter={deleteChapter}
               onUpdateTitle={(id, title) => updateChapter(id, 'title', title)}
+              onGenerateTitle={handleGenerateTitle}
+              isGeneratingTitleFor={isGeneratingTitleFor}
             />
           </div>
         </div>
@@ -179,6 +346,13 @@ He reached the lantern room and froze. The great glass lens was already rotating
             onSelectionChange={handleSelectionChange}
             settings={settings}
           />
+
+          {/* Floating Save Status for Zen Mode */}
+          {mode === AppMode.ZEN && lastSaved && (
+              <div className="fixed bottom-6 right-20 text-stone-300 text-xs select-none pointer-events-none opacity-50">
+                  Auto-saved {lastSaved.toLocaleTimeString()}
+              </div>
+          )}
 
           {/* Floating Exit Zen Button */}
           {mode === AppMode.ZEN && (

@@ -49,3 +49,28 @@ export const generateNovelIllustration = async (textSnippet: string): Promise<st
     throw error;
   }
 };
+
+/**
+ * Generates a short, creative chapter title based on the chapter content.
+ * Uses 'gemini-3-flash-preview' for text tasks.
+ */
+export const generateChapterTitle = async (chapterContent: string): Promise<string> => {
+  if (!chapterContent || chapterContent.trim().length < 10) {
+    throw new Error("Chapter content is too short to generate a title.");
+  }
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: `Read the following chapter text and generate a single, creative, short title (max 6 words) for it. Do not include "Chapter X" or quotes in the output, just the title text itself. 
+      
+      Text:
+      ${chapterContent.substring(0, 5000)}`, // Limit context to first 5000 chars to save tokens/speed
+    });
+
+    return response.text?.trim() || "Untitled Chapter";
+  } catch (error) {
+    console.error("Gemini Title Generation Error:", error);
+    throw error;
+  }
+};

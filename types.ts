@@ -45,6 +45,8 @@ export interface ChapterSidebarProps {
   onAddChapter: () => void;
   onDeleteChapter: (id: string) => void;
   onUpdateTitle: (id: string, newTitle: string) => void;
+  onGenerateTitle: (id: string) => void;
+  isGeneratingTitleFor: string | null;
 }
 
 export interface FormatToolbarProps {

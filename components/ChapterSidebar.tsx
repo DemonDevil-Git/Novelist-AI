@@ -1,6 +1,6 @@
 import React from 'react';
 import { ChapterSidebarProps } from '../types';
-import { Plus, Trash2, FileText, ChevronRight } from 'lucide-react';
+import { Plus, Trash2, FileText, ChevronRight, Wand2, Loader2 } from 'lucide-react';
 
 const ChapterSidebar: React.FC<ChapterSidebarProps> = ({
   chapters,
@@ -8,7 +8,9 @@ const ChapterSidebar: React.FC<ChapterSidebarProps> = ({
   onChapterSelect,
   onAddChapter,
   onDeleteChapter,
-  onUpdateTitle
+  onUpdateTitle,
+  onGenerateTitle,
+  isGeneratingTitleFor
 }) => {
   return (
     <div className="w-64 bg-stone-50 border-r border-stone-200 h-full flex flex-col z-20 shadow-sm">
@@ -23,7 +25,7 @@ const ChapterSidebar: React.FC<ChapterSidebarProps> = ({
         {chapters.map((chapter) => (
           <div 
             key={chapter.id}
-            className={`group flex items-center gap-2 p-2 rounded-md cursor-pointer transition-colors
+            className={`group flex items-center gap-2 p-2 rounded-md cursor-pointer transition-colors relative
               ${activeChapterId === chapter.id ? 'bg-white shadow-sm border border-stone-200' : 'hover:bg-stone-200/50'}`}
             onClick={() => onChapterSelect(chapter.id)}
           >
@@ -38,18 +40,38 @@ const ChapterSidebar: React.FC<ChapterSidebarProps> = ({
               onClick={(e) => e.stopPropagation()} 
             />
 
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                if(confirm('Are you sure you want to delete this chapter?')) {
-                  onDeleteChapter(chapter.id);
-                }
-              }}
-              className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-100 hover:text-red-600 rounded transition-all"
-              title="Delete Chapter"
-            >
-              <Trash2 className="w-3 h-3" />
-            </button>
+            <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity gap-1">
+                {/* AI Title Generator Button */}
+                <button
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onGenerateTitle(chapter.id);
+                    }}
+                    disabled={isGeneratingTitleFor === chapter.id}
+                    className="p-1 hover:bg-indigo-100 hover:text-indigo-600 rounded transition-all"
+                    title="Generate Title with AI"
+                >
+                    {isGeneratingTitleFor === chapter.id ? (
+                        <Loader2 className="w-3 h-3 animate-spin text-indigo-500" />
+                    ) : (
+                        <Wand2 className="w-3 h-3" />
+                    )}
+                </button>
+
+                {/* Delete Button */}
+                <button
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        if(confirm('Are you sure you want to delete this chapter?')) {
+                        onDeleteChapter(chapter.id);
+                        }
+                    }}
+                    className="p-1 hover:bg-red-100 hover:text-red-600 rounded transition-all"
+                    title="Delete Chapter"
+                >
+                    <Trash2 className="w-3 h-3" />
+                </button>
+            </div>
           </div>
         ))}
       </div>
