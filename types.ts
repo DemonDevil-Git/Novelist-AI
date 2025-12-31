@@ -1,3 +1,5 @@
+import React from 'react';
+
 export enum AppMode {
   ZEN = 'ZEN',
   CREATIVE = 'CREATIVE',
@@ -15,6 +17,22 @@ export interface Illustration {
   imageUrl: string;
   promptSnippet: string;
   timestamp: number;
+}
+
+export interface Work {
+  id: string;
+  title: string;
+  chapters: Chapter[];
+  illustrations: Illustration[];
+  lastModified: number;
+  coverImage?: string; // Optional cover image (usually the first illustration)
+}
+
+export interface LibraryProps {
+  works: Work[];
+  onSelectWork: (workId: string) => void;
+  onCreateWork: () => void;
+  onDeleteWork: (e: React.MouseEvent, workId: string) => void;
 }
 
 export interface EditorSettings {

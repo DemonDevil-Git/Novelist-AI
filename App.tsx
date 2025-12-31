@@ -1,36 +1,37 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { AppMode, Illustration, Chapter, EditorSettings } from './types';
+import { AppMode, Illustration, Chapter, EditorSettings, Work } from './types';
 import Editor from './components/Editor';
 import IllustrationPanel from './components/IllustrationPanel';
 import ChapterSidebar from './components/ChapterSidebar';
 import FormatToolbar from './components/FormatToolbar';
+import Library from './components/Library';
+import ConfirmationModal from './components/ConfirmationModal';
 import { generateNovelIllustration, generateChapterTitle } from './services/geminiService';
-import { Feather, Minimize2, Undo2, Redo2, Download, Cloud } from 'lucide-react';
+import { Feather, Minimize2, Undo2, Redo2, Download, Cloud, ChevronLeft } from 'lucide-react';
 
-const STORAGE_KEY = 'novelist-ai-chapters';
+const STORAGE_KEY = 'novelist-ai-works';
 
 const App: React.FC = () => {
-  const [mode, setMode] = useState<AppMode>(AppMode.EDITOR);
+  // --- Global State ---
+  const [works, setWorks] = useState<Work[]>([]);
+  const [activeWorkId, setActiveWorkId] = useState<string | null>(null);
   
-  // Chapter State with History for Undo/Redo
-  const [chapters, setChapters] = useState<Chapter[]>([
-    {
-      id: '1',
-      title: 'Chapter 1: The Lighthouse',
-      content: `The old lighthouse stood defiant against the crashing waves. For fifty years, Silas had climbed the spiral stairs, his knees aching more with each passing winter. 
-
-Tonight was different. The storm wasn't just wind and rain; there was a peculiar green tint to the lightning that made the hairs on his arms stand up.
-
-He reached the lantern room and froze. The great glass lens was already rotating, but the light it cast wasn't the warm yellow beam he knew. It was a piercing violet that seemed to cut through reality itself.`
-    }
-  ]);
-
+  // --- Active Work State (Derived/Local) ---
+  const [mode, setMode] = useState<AppMode>(AppMode.EDITOR);
   const [history, setHistory] = useState<Chapter[][]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const historyTimeoutRef = useRef<number | null>(null);
-  
-  const [activeChapterId, setActiveChapterId] = useState<string | null>('1');
+  const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
+  const [isGeneratingTitleFor, setIsGeneratingTitleFor] = useState<string | null>(null);
+
+  // --- Modal State ---
+  const [workToDelete, setWorkToDelete] = useState<string | null>(null);
+  const [chapterToDelete, setChapterToDelete] = useState<string | null>(null);
+
+  // Creative Mode State
+  const [selectedText, setSelectedText] = useState<string>('');
+  const [isGenerating, setIsGenerating] = useState<boolean>(false);
 
   // Editor Appearance Settings
   const [settings, setSettings] = useState<EditorSettings>({
@@ -39,76 +40,234 @@ He reached the lantern room and froze. The great glass lens was already rotating
     lineHeight: 'leading-loose',
   });
 
-  // Creative Mode State
-  const [selectedText, setSelectedText] = useState<string>('');
-  const [illustrations, setIllustrations] = useState<Illustration[]>([]);
-  const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  // --- Helpers ---
+  const activeWork = works.find(w => w.id === activeWorkId);
   
-  // AI Title Generation State
-  const [isGeneratingTitleFor, setIsGeneratingTitleFor] = useState<string | null>(null);
+  // Count words across chapters
+  const countWords = (text: string) => {
+    if (!text) return 0;
+    const trimmed = text.trim();
+    return trimmed ? trimmed.split(/\s+/).length : 0;
+  };
+  
+  const totalWords = activeWork 
+    ? activeWork.chapters.reduce((acc, ch) => acc + countWords(ch.content), 0)
+    : 0;
 
-  // --- Initialization & Auto-Save ---
+  // --- Initialization & Storage ---
 
-  // Load from local storage
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-            setChapters(parsed);
-            setHistory([parsed]);
-            setHistoryIndex(0);
-            setActiveChapterId(parsed[0].id);
+        if (Array.isArray(parsed)) {
+            // Migration check: if it looks like the old 'Chapter[]' format, convert it
+            if (parsed.length > 0 && !parsed[0].chapters && parsed[0].content) {
+                const migratedWork: Work = {
+                    id: 'default-migrated',
+                    title: 'Untitled Novel',
+                    chapters: parsed as any,
+                    illustrations: [],
+                    lastModified: Date.now()
+                };
+                setWorks([migratedWork]);
+            } else {
+                setWorks(parsed);
+            }
         }
       } catch (e) {
-        console.error("Failed to load saved chapters", e);
+        console.error("Failed to load saved works", e);
       }
-    } else {
-        // Initialize history with default state
-        setHistory([chapters]);
-        setHistoryIndex(0);
     }
   }, []);
 
-  // Save to local storage (Auto-save)
+  // Auto-save Works to LocalStorage
   useEffect(() => {
     const handler = setTimeout(() => {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
-        setLastSaved(new Date());
-    }, 1000); // Auto-save after 1 second of inactivity
+        if (works.length > 0) {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(works));
+            setLastSaved(new Date());
+        }
+    }, 1000); 
 
     return () => clearTimeout(handler);
-  }, [chapters]);
+  }, [works]);
 
-  // --- History Management (Undo/Redo) ---
-  
-  const pushToHistory = (newChapters: Chapter[]) => {
-    // Debounce history updates to avoid saving every keystroke as a separate step
-    if (historyTimeoutRef.current) {
-        clearTimeout(historyTimeoutRef.current);
+  // --- Library Actions ---
+
+  const handleCreateWork = () => {
+    const newWorkId = Date.now().toString();
+    const newWork: Work = {
+        id: newWorkId,
+        title: 'Untitled Novel',
+        chapters: [{
+            id: '1',
+            title: 'Chapter 1',
+            content: ''
+        }],
+        illustrations: [],
+        lastModified: Date.now()
+    };
+    setWorks([newWork, ...works]);
+    handleSelectWork(newWorkId);
+  };
+
+  const handleSelectWork = (workId: string) => {
+    setActiveWorkId(workId);
+    setMode(AppMode.EDITOR);
+    
+    // Reset History for new session
+    const work = works.find(w => w.id === workId);
+    if (work) {
+        setHistory([work.chapters]);
+        setHistoryIndex(0);
+        setActiveChapterId(work.chapters[0]?.id || null);
     }
+  };
 
-    historyTimeoutRef.current = window.setTimeout(() => {
-        const newHistory = history.slice(0, historyIndex + 1);
-        newHistory.push(newChapters);
-        
-        // Limit history size to 50 steps
-        if (newHistory.length > 50) {
-            newHistory.shift();
-        } else {
-            setHistoryIndex(newHistory.length - 1);
+  // Step 1: Request Delete (Opens Modal)
+  const handleDeleteWorkRequest = (e: React.MouseEvent, workId: string) => {
+    e.stopPropagation();
+    setWorkToDelete(workId);
+  };
+
+  // Step 2: Confirm Delete (Actual Action)
+  const confirmDeleteWork = () => {
+    if (workToDelete) {
+        setWorks(prev => prev.filter(w => w.id !== workToDelete));
+        if (activeWorkId === workToDelete) {
+            setActiveWorkId(null);
         }
-        
-        setHistory(newHistory);
-    }, 800); 
+        setWorkToDelete(null);
+    }
+  };
+
+  const handleBackToLibrary = () => {
+    setActiveWorkId(null);
+    setMode(AppMode.EDITOR); // Reset mode for next time
+  };
+
+  // --- Editor Logic (Acting on Active Work) ---
+
+  const updateWorkChapters = (newChapters: Chapter[]) => {
+      if (!activeWorkId) return;
+
+      // Update Works State
+      setWorks(prev => prev.map(w => {
+          if (w.id === activeWorkId) {
+              return { ...w, chapters: newChapters, lastModified: Date.now() };
+          }
+          return w;
+      }));
+
+      // Update History (Debounced)
+      if (historyTimeoutRef.current) clearTimeout(historyTimeoutRef.current);
+      historyTimeoutRef.current = window.setTimeout(() => {
+          const newHistory = history.slice(0, historyIndex + 1);
+          newHistory.push(newChapters);
+          if (newHistory.length > 50) newHistory.shift();
+          else setHistoryIndex(newHistory.length - 1);
+          setHistory(newHistory);
+      }, 800);
+  };
+
+  const updateWorkIllustrations = (newIllustrations: Illustration[]) => {
+      if (!activeWorkId) return;
+      setWorks(prev => prev.map(w => {
+          if (w.id === activeWorkId) {
+              return { ...w, illustrations: newIllustrations, lastModified: Date.now() };
+          }
+          return w;
+      }));
+  };
+
+  const updateWorkTitle = (newTitle: string) => {
+    if (!activeWorkId) return;
+    setWorks(prev => prev.map(w => {
+        if (w.id === activeWorkId) {
+            return { ...w, title: newTitle, lastModified: Date.now() };
+        }
+        return w;
+    }));
+  };
+
+  // --- Chapter Manipulation ---
+
+  const updateChapter = (id: string, field: keyof Chapter, value: string) => {
+    if (!activeWork) return;
+    const newChapters = activeWork.chapters.map(ch => ch.id === id ? { ...ch, [field]: value } : ch);
+    updateWorkChapters(newChapters);
+  };
+
+  const addChapter = () => {
+    if (!activeWork) return;
+    const newId = Date.now().toString();
+    const newChapter: Chapter = {
+      id: newId,
+      title: `Chapter ${activeWork.chapters.length + 1}`,
+      content: ''
+    };
+    const newChapters = [...activeWork.chapters, newChapter];
+    
+    // Immediate state update to force re-render
+    setWorks(prev => prev.map(w => {
+        if (w.id === activeWorkId) return { ...w, chapters: newChapters, lastModified: Date.now() };
+        return w;
+    }));
+    
+    // Immediate history push
+    const newHistory = history.slice(0, historyIndex + 1);
+    newHistory.push(newChapters);
+    setHistory(newHistory);
+    setHistoryIndex(newHistory.length - 1);
+
+    setActiveChapterId(newId);
+    setTimeout(() => {
+        const element = document.getElementById(`chapter-${newId}`);
+        if (element) element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+  };
+
+  // Step 1: Request Delete Chapter
+  const handleDeleteChapterRequest = (id: string) => {
+    if (!activeWork || activeWork.chapters.length <= 1) {
+        // Just show simple alert or ignore if it's the last chapter
+        // Or could allow deleting last chapter to clear content, but let's stick to simple logic
+        return; 
+    }
+    setChapterToDelete(id);
+  };
+
+  // Step 2: Confirm Delete Chapter
+  const confirmDeleteChapter = () => {
+     if (!activeWork || !chapterToDelete) return;
+
+    const newChapters = activeWork.chapters.filter(ch => ch.id !== chapterToDelete);
+    
+    setWorks(prev => prev.map(w => {
+        if (w.id === activeWorkId) return { ...w, chapters: newChapters, lastModified: Date.now() };
+        return w;
+    }));
+
+    // Immediate history push
+    const newHistory = history.slice(0, historyIndex + 1);
+    newHistory.push(newChapters);
+    setHistory(newHistory);
+    setHistoryIndex(newHistory.length - 1);
+    
+    setChapterToDelete(null);
   };
 
   const undo = () => {
     if (historyIndex > 0) {
       const newIndex = historyIndex - 1;
       setHistoryIndex(newIndex);
-      setChapters(history[newIndex]);
+      // Directly modify works without triggering new history push
+      setWorks(prev => prev.map(w => {
+          if (w.id === activeWorkId) return { ...w, chapters: history[newIndex], lastModified: Date.now() };
+          return w;
+      }));
     }
   };
 
@@ -116,71 +275,19 @@ He reached the lantern room and froze. The great glass lens was already rotating
     if (historyIndex < history.length - 1) {
       const newIndex = historyIndex + 1;
       setHistoryIndex(newIndex);
-      setChapters(history[newIndex]);
+      setWorks(prev => prev.map(w => {
+          if (w.id === activeWorkId) return { ...w, chapters: history[newIndex], lastModified: Date.now() };
+          return w;
+      }));
     }
   };
 
-  // --- Content Handlers ---
+  // --- Features ---
 
-  const updateChapter = (id: string, field: keyof Chapter, value: string) => {
-    const newChapters = chapters.map(ch => ch.id === id ? { ...ch, [field]: value } : ch);
-    setChapters(newChapters);
-    pushToHistory(newChapters);
-  };
-
-  const addChapter = () => {
-    const newId = Date.now().toString();
-    const newChapter: Chapter = {
-      id: newId,
-      title: `Chapter ${chapters.length + 1}`,
-      content: ''
-    };
-    const newChapters = [...chapters, newChapter];
-    setChapters(newChapters);
-    
-    // Immediate push to history for structural changes
-    const newHistory = history.slice(0, historyIndex + 1);
-    newHistory.push(newChapters);
-    setHistory(newHistory);
-    setHistoryIndex(newHistory.length - 1);
-
-    setActiveChapterId(newId);
-    setTimeout(() => scrollToChapter(newId), 100);
-  };
-
-  const deleteChapter = (id: string) => {
-    if (chapters.length <= 1) return;
-    const newChapters = chapters.filter(ch => ch.id !== id);
-    setChapters(newChapters);
-
-    // Immediate push to history
-    const newHistory = history.slice(0, historyIndex + 1);
-    newHistory.push(newChapters);
-    setHistory(newHistory);
-    setHistoryIndex(newHistory.length - 1);
-  };
-
-  const scrollToChapter = (id: string) => {
-    setActiveChapterId(id);
-    const element = document.getElementById(`chapter-${id}`);
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  };
-
-  const updateSettings = (key: keyof EditorSettings, value: string) => {
-    setSettings(prev => ({ ...prev, [key]: value }));
-  };
-
-  const toggleMode = (newMode: AppMode) => {
-    if (mode === newMode) return; 
-    setMode(newMode);
-  };
-
-  // --- Export ---
   const handleExportMarkdown = () => {
-    let mdContent = `# Novelist AI Export\n\n`;
-    chapters.forEach(ch => {
+    if (!activeWork) return;
+    let mdContent = `# ${activeWork.title}\n\n`;
+    activeWork.chapters.forEach(ch => {
         mdContent += `## ${ch.title}\n\n${ch.content}\n\n`;
     });
     
@@ -188,21 +295,15 @@ He reached the lantern room and froze. The great glass lens was already rotating
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'novel_export.md';
+    a.download = `${activeWork.title.replace(/\s+/g, '_')}.md`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
 
-  // --- Creative Handlers ---
-
-  const handleSelectionChange = useCallback((text: string) => {
-    setSelectedText(text);
-  }, []);
-
   const handleGenerateIllustration = async () => {
-    if (!selectedText) return;
+    if (!selectedText || !activeWork) return;
 
     setIsGenerating(true);
     try {
@@ -213,7 +314,7 @@ He reached the lantern room and froze. The great glass lens was already rotating
         promptSnippet: selectedText,
         timestamp: Date.now(),
       };
-      setIllustrations((prev) => [newIllustration, ...prev]);
+      updateWorkIllustrations([newIllustration, ...activeWork.illustrations]);
     } catch (error) {
       alert("Failed to generate illustration. Please try again.");
     } finally {
@@ -222,11 +323,10 @@ He reached the lantern room and froze. The great glass lens was already rotating
   };
 
   const handleGenerateTitle = async (chapterId: string) => {
-    const chapter = chapters.find(c => c.id === chapterId);
-    if (!chapter) return;
-    
-    if (chapter.content.length < 50) {
-        alert("Chapter content is too short to generate a title. Write a bit more first!");
+    if (!activeWork) return;
+    const chapter = activeWork.chapters.find(c => c.id === chapterId);
+    if (!chapter || chapter.content.length < 50) {
+        alert("Content too short to generate a title.");
         return;
     }
 
@@ -235,154 +335,205 @@ He reached the lantern room and froze. The great glass lens was already rotating
         const newTitle = await generateChapterTitle(chapter.content);
         updateChapter(chapterId, 'title', newTitle);
     } catch (e) {
-        alert("Could not generate title. Try again.");
+        alert("Could not generate title.");
     } finally {
         setIsGeneratingTitleFor(null);
     }
   };
 
+  const scrollToChapter = (id: string) => {
+    setActiveChapterId(id);
+    const element = document.getElementById(`chapter-${id}`);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  // --- Render ---
+
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#fcfaf7] text-gray-900 font-sans">
       
-      {/* Top Bar */}
+      {/* Modals */}
+      <ConfirmationModal
+        isOpen={!!workToDelete}
+        title="Delete Novel"
+        message="Are you sure you want to delete this entire novel? This action cannot be undone and all chapters and illustrations will be lost."
+        confirmLabel="Delete Novel"
+        onConfirm={confirmDeleteWork}
+        onCancel={() => setWorkToDelete(null)}
+      />
+
+      <ConfirmationModal
+        isOpen={!!chapterToDelete}
+        title="Delete Chapter"
+        message="Are you sure you want to delete this chapter? This action cannot be undone."
+        confirmLabel="Delete Chapter"
+        onConfirm={confirmDeleteChapter}
+        onCancel={() => setChapterToDelete(null)}
+      />
+
+      {/* Top Bar - Common Header */}
       <header 
         className={`flex items-center justify-between px-6 py-3 border-b border-stone-200 bg-white transition-all duration-500 z-30
-          ${mode === AppMode.ZEN ? '-mt-16 opacity-0' : 'mt-0 opacity-100 shadow-sm'}`}
+          ${mode === AppMode.ZEN && activeWorkId ? '-mt-16 opacity-0' : 'mt-0 opacity-100 shadow-sm'}`}
       >
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-stone-900 rounded-lg flex items-center justify-center text-white shadow-md">
-                <Feather size={18} />
+          <div 
+            onClick={handleBackToLibrary}
+            className={`flex items-center gap-2 cursor-pointer group ${!activeWorkId ? 'pointer-events-none' : ''}`}
+          >
+            <div className="w-8 h-8 bg-stone-900 rounded-lg flex items-center justify-center text-white shadow-md group-hover:bg-indigo-600 transition-colors">
+                {activeWorkId ? <ChevronLeft size={20} /> : <Feather size={18} />}
             </div>
-            <h1 className="text-lg font-bold tracking-tight text-stone-800 hidden md:block">Novelist AI</h1>
+            <h1 className="text-lg font-bold tracking-tight text-stone-800 hidden md:block group-hover:text-indigo-700 transition-colors">
+                Novelist AI
+            </h1>
           </div>
           
-          {/* Action Buttons */}
-          <div className="flex items-center gap-1 border-l border-stone-200 pl-4">
-             <button onClick={undo} disabled={historyIndex <= 0} className="p-2 text-stone-500 hover:bg-stone-100 rounded-md disabled:opacity-30 transition-colors" title="Undo">
-                <Undo2 size={18} />
-             </button>
-             <button onClick={redo} disabled={historyIndex >= history.length - 1} className="p-2 text-stone-500 hover:bg-stone-100 rounded-md disabled:opacity-30 transition-colors" title="Redo">
-                <Redo2 size={18} />
-             </button>
-             <button onClick={handleExportMarkdown} className="p-2 text-stone-500 hover:bg-stone-100 rounded-md transition-colors" title="Export Markdown">
-                <Download size={18} />
-             </button>
-          </div>
+          {/* Editor Action Buttons (Only visible if active work) */}
+          {activeWorkId && (
+            <div className="flex items-center gap-1 border-l border-stone-200 pl-4">
+                <button onClick={undo} disabled={historyIndex <= 0} className="p-2 text-stone-500 hover:bg-stone-100 rounded-md disabled:opacity-30 transition-colors" title="Undo">
+                    <Undo2 size={18} />
+                </button>
+                <button onClick={redo} disabled={historyIndex >= history.length - 1} className="p-2 text-stone-500 hover:bg-stone-100 rounded-md disabled:opacity-30 transition-colors" title="Redo">
+                    <Redo2 size={18} />
+                </button>
+                <button onClick={handleExportMarkdown} className="p-2 text-stone-500 hover:bg-stone-100 rounded-md transition-colors" title="Export Markdown">
+                    <Download size={18} />
+                </button>
+            </div>
+          )}
         </div>
 
-        {/* Status Indicator */}
-        <div className="flex items-center gap-2 text-xs font-medium text-stone-400">
-             {lastSaved ? (
-                 <>
-                    <Cloud size={14} />
-                    <span>Saved {lastSaved.toLocaleTimeString()}</span>
-                 </>
-             ) : (
-                 <span>Unsaved</span>
-             )}
-        </div>
+        {/* Status / Title Area */}
+        {activeWorkId && activeWork ? (
+            <div className="flex flex-col items-center">
+                <input 
+                    value={activeWork.title}
+                    onChange={(e) => updateWorkTitle(e.target.value)}
+                    className="text-sm font-semibold text-stone-700 text-center bg-transparent border-none focus:ring-0 p-0 hover:bg-stone-50 rounded px-2 transition-colors"
+                />
+                <div className="flex items-center gap-2 text-[10px] font-medium text-stone-400">
+                    <span>{totalWords.toLocaleString()} words</span>
+                    {lastSaved && <span>• Saved {lastSaved.toLocaleTimeString()}</span>}
+                </div>
+            </div>
+        ) : (
+            <div className="text-sm font-medium text-stone-500">
+                Library
+            </div>
+        )}
         
+        {/* Mode Toggles (Only visible if active work) */}
         <div className="flex items-center gap-4">
-           <div className="flex bg-stone-100 rounded-lg p-1">
-             <button
-               onClick={() => toggleMode(AppMode.EDITOR)}
-               className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${mode === AppMode.EDITOR ? 'bg-white shadow text-stone-900' : 'text-stone-500 hover:text-stone-700'}`}
-             >
-               Editor
-             </button>
-             <button
-               onClick={() => toggleMode(AppMode.CREATIVE)}
-               className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${mode === AppMode.CREATIVE ? 'bg-white shadow text-stone-900' : 'text-stone-500 hover:text-stone-700'}`}
-             >
-               Creative
-             </button>
-             <button
-               onClick={() => toggleMode(AppMode.ZEN)}
-               className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${mode === AppMode.ZEN ? 'bg-white shadow text-stone-900' : 'text-stone-500 hover:text-stone-700'}`}
-             >
-               Zen
-             </button>
-           </div>
+            {activeWorkId && (
+                <div className="flex bg-stone-100 rounded-lg p-1">
+                    <button
+                        onClick={() => setMode(AppMode.EDITOR)}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${mode === AppMode.EDITOR ? 'bg-white shadow text-stone-900' : 'text-stone-500 hover:text-stone-700'}`}
+                    >
+                        Editor
+                    </button>
+                    <button
+                        onClick={() => setMode(AppMode.CREATIVE)}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${mode === AppMode.CREATIVE ? 'bg-white shadow text-stone-900' : 'text-stone-500 hover:text-stone-700'}`}
+                    >
+                        Creative
+                    </button>
+                    <button
+                        onClick={() => setMode(AppMode.ZEN)}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${mode === AppMode.ZEN ? 'bg-white shadow text-stone-900' : 'text-stone-500 hover:text-stone-700'}`}
+                    >
+                        Zen
+                    </button>
+                </div>
+            )}
         </div>
       </header>
 
-      {/* Main Layout Area */}
-      <main className="flex-1 flex overflow-hidden relative">
-        
-        {/* Left Sidebar - Chapter Navigation (Only in Editor Mode) */}
-        <div 
-          className={`transition-all duration-500 ease-in-out transform border-r border-stone-200 z-20
-            ${mode === AppMode.EDITOR ? 'translate-x-0 w-64 opacity-100' : '-translate-x-full w-0 opacity-0 overflow-hidden border-none'}
-          `}
-        >
-          <div className="w-64 h-full">
-            <ChapterSidebar 
-              chapters={chapters}
-              activeChapterId={activeChapterId}
-              onChapterSelect={scrollToChapter}
-              onAddChapter={addChapter}
-              onDeleteChapter={deleteChapter}
-              onUpdateTitle={(id, title) => updateChapter(id, 'title', title)}
-              onGenerateTitle={handleGenerateTitle}
-              isGeneratingTitleFor={isGeneratingTitleFor}
-            />
-          </div>
-        </div>
-
-        {/* Center Content Area */}
-        <div className="flex-1 relative flex flex-col min-w-0">
-          
-          {/* Format Toolbar - Only in Editor Mode */}
-          {mode === AppMode.EDITOR && (
-             <FormatToolbar settings={settings} onUpdateSettings={updateSettings} />
-          )}
-
-          {/* Editor Surface */}
-          <Editor 
-            chapters={chapters}
-            updateChapter={updateChapter}
-            mode={mode}
-            onSelectionChange={handleSelectionChange}
-            settings={settings}
-          />
-
-          {/* Floating Save Status for Zen Mode */}
-          {mode === AppMode.ZEN && lastSaved && (
-              <div className="fixed bottom-6 right-20 text-stone-300 text-xs select-none pointer-events-none opacity-50">
-                  Auto-saved {lastSaved.toLocaleTimeString()}
-              </div>
-          )}
-
-          {/* Floating Exit Zen Button */}
-          {mode === AppMode.ZEN && (
-            <button
-              onClick={() => toggleMode(AppMode.EDITOR)}
-              className="fixed top-6 right-6 p-3 rounded-full bg-stone-100/50 hover:bg-stone-200 text-stone-500 hover:text-stone-800 transition-all duration-300 backdrop-blur-sm z-50 group"
-              title="Exit Zen Mode"
+      {/* Main View Switcher */}
+      {!activeWorkId || !activeWork ? (
+         // Library View
+         <Library 
+            works={works} 
+            onSelectWork={handleSelectWork} 
+            onCreateWork={handleCreateWork} 
+            onDeleteWork={handleDeleteWorkRequest} 
+         />
+      ) : (
+        // Editor View
+        <main className="flex-1 flex overflow-hidden relative">
+            
+            {/* Left Sidebar */}
+            <div 
+                className={`transition-all duration-500 ease-in-out transform border-r border-stone-200 z-20
+                    ${mode === AppMode.EDITOR ? 'translate-x-0 w-64 opacity-100' : '-translate-x-full w-0 opacity-0 overflow-hidden border-none'}
+                `}
             >
-              <Minimize2 size={20} />
-            </button>
-          )}
-        </div>
+                <div className="w-64 h-full">
+                    <ChapterSidebar 
+                        chapters={activeWork.chapters}
+                        activeChapterId={activeChapterId}
+                        onChapterSelect={scrollToChapter}
+                        onAddChapter={addChapter}
+                        onDeleteChapter={handleDeleteChapterRequest}
+                        onUpdateTitle={(id, title) => updateChapter(id, 'title', title)}
+                        onGenerateTitle={handleGenerateTitle}
+                        isGeneratingTitleFor={isGeneratingTitleFor}
+                    />
+                </div>
+            </div>
 
-        {/* Right Sidebar - Creative Visualizer (Only in Creative Mode) */}
-        <div 
-          className={`transition-all duration-500 ease-in-out transform border-l border-stone-200 z-20
-            ${mode === AppMode.CREATIVE ? 'translate-x-0 w-80 opacity-100' : 'translate-x-full w-0 opacity-0 overflow-hidden border-none'}
-          `}
-        >
-          <div className="w-80 h-full">
-            <IllustrationPanel 
-              illustrations={illustrations}
-              isGenerating={isGenerating}
-              onGenerate={handleGenerateIllustration}
-              selectedText={selectedText}
-            />
-          </div>
-        </div>
+            {/* Center Area */}
+            <div className="flex-1 relative flex flex-col min-w-0">
+                {mode === AppMode.EDITOR && (
+                    <FormatToolbar settings={settings} onUpdateSettings={(k, v) => setSettings(p => ({...p, [k]: v}))} />
+                )}
 
-      </main>
+                <Editor 
+                    chapters={activeWork.chapters}
+                    updateChapter={updateChapter}
+                    mode={mode}
+                    onSelectionChange={setSelectedText}
+                    settings={settings}
+                />
+
+                {/* Zen Extras */}
+                {mode === AppMode.ZEN && (
+                    <>
+                        <div className="fixed bottom-6 right-20 text-stone-400 text-xs select-none pointer-events-none opacity-40 flex items-center gap-2">
+                            <span>{totalWords.toLocaleString()} words</span>
+                        </div>
+                        <button
+                            onClick={() => setMode(AppMode.EDITOR)}
+                            className="fixed top-6 right-6 p-3 rounded-full bg-stone-100/30 hover:bg-stone-100 text-stone-400 hover:text-stone-800 transition-all duration-300 backdrop-blur-sm z-50"
+                            title="Exit Zen Mode"
+                        >
+                            <Minimize2 size={20} />
+                        </button>
+                    </>
+                )}
+            </div>
+
+            {/* Right Sidebar */}
+            <div 
+                className={`transition-all duration-500 ease-in-out transform border-l border-stone-200 z-20
+                    ${mode === AppMode.CREATIVE ? 'translate-x-0 w-80 opacity-100' : 'translate-x-full w-0 opacity-0 overflow-hidden border-none'}
+                `}
+            >
+                <div className="w-80 h-full">
+                    <IllustrationPanel 
+                        illustrations={activeWork.illustrations}
+                        isGenerating={isGenerating}
+                        onGenerate={handleGenerateIllustration}
+                        selectedText={selectedText}
+                    />
+                </div>
+            </div>
+        </main>
+      )}
     </div>
   );
 };

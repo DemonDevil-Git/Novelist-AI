@@ -38,9 +38,11 @@ const Editor: React.FC<EditorProps> = ({
   }, [chapters, settings, mode]);
 
   // Dynamic Styles based on settings and mode
+  // Zen Mode: Tighter width (2xl), more vertical padding, no border/shadow
+  // Editor/Creative: Standard width (3xl), card-like appearance
   const containerClass = mode === AppMode.ZEN 
-    ? "max-w-3xl mx-auto py-20 px-8 transition-all duration-700 ease-in-out" 
-    : "max-w-4xl mx-auto px-12 py-12 transition-all duration-700 ease-in-out bg-white shadow-sm min-h-full my-4 rounded-lg";
+    ? "max-w-2xl mx-auto py-32 px-8 transition-all duration-1000 ease-in-out" 
+    : "max-w-3xl mx-auto px-16 py-16 transition-all duration-700 ease-in-out bg-white shadow-sm min-h-[calc(100vh-8rem)] my-8 rounded-xl border border-stone-100";
 
   // Base styling + User Configurable Settings
   const contentStyle = `${settings.fontFamily} ${settings.fontSize} ${settings.lineHeight}`;
@@ -50,16 +52,17 @@ const Editor: React.FC<EditorProps> = ({
       <div className={containerClass}>
         
         {chapters.map((chapter, index) => (
-          <div key={chapter.id} id={`chapter-${chapter.id}`} className="mb-16 scroll-mt-24">
+          <div key={chapter.id} id={`chapter-${chapter.id}`} className="mb-20 scroll-mt-32">
             
             {/* Chapter Heading */}
+            {/* Zen mode uses larger serif font for titles to mimic a real book */}
             <input
               type="text"
               value={chapter.title}
               onChange={(e) => updateChapter(chapter.id, 'title', e.target.value)}
               placeholder="Chapter Title"
-              className={`w-full bg-transparent border-none p-0 focus:ring-0 font-bold text-stone-800 placeholder-stone-300 mb-6
-                ${mode === AppMode.ZEN ? 'text-center text-3xl opacity-80' : 'text-3xl'}`}
+              className={`w-full bg-transparent border-none p-0 focus:ring-0 font-bold text-stone-800 placeholder-stone-300 mb-8 font-serif
+                ${mode === AppMode.ZEN ? 'text-4xl opacity-90' : 'text-3xl'}`}
             />
 
             {/* Chapter Content */}
@@ -71,7 +74,7 @@ const Editor: React.FC<EditorProps> = ({
               onMouseUp={handleSelect}
               onKeyUp={handleSelect}
               placeholder="Start writing..."
-              className={`w-full bg-transparent border-none resize-none focus:ring-0 outline-none text-stone-700 placeholder-stone-300 overflow-hidden
+              className={`w-full bg-transparent border-none resize-none focus:ring-0 outline-none text-stone-800 placeholder-stone-300 overflow-hidden selection:bg-indigo-100 selection:text-indigo-900
                 ${contentStyle}`}
               spellCheck={false}
               style={{ minHeight: '200px' }}
@@ -79,7 +82,12 @@ const Editor: React.FC<EditorProps> = ({
             
             {/* Visual separator in non-Zen modes */}
             {mode !== AppMode.ZEN && index < chapters.length - 1 && (
-              <div className="w-24 h-px bg-stone-200 mx-auto mt-12 mb-4"></div>
+              <div className="w-16 h-px bg-stone-200 mx-auto mt-16 mb-4"></div>
+            )}
+            
+            {/* Subtle separator/spacing for Zen mode flow */}
+            {mode === AppMode.ZEN && index < chapters.length - 1 && (
+               <div className="h-24"></div>
             )}
           </div>
         ))}
