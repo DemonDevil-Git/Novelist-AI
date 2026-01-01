@@ -7,9 +7,8 @@ import FormatToolbar from './components/FormatToolbar';
 import Library from './components/Library';
 import ConfirmationModal from './components/ConfirmationModal';
 import { generateNovelIllustration, generateChapterTitle } from './services/geminiService';
-import { Feather, Minimize2, Undo2, Redo2, Download, Cloud, ChevronLeft } from 'lucide-react';
-
-const STORAGE_KEY = 'novelist-ai-works';
+import { storageService } from './services/storageService';
+import { Feather, Minimize2, Undo2, Redo2, Download, Cloud, ChevronLeft, Loader2 } from 'lucide-react';
 
 const App: React.FC = () => {
   // --- Global State ---
@@ -56,47 +55,40 @@ const App: React.FC = () => {
 
   // --- Initialization & Storage ---
 
+  // Load Works from Server (or Fallback) on Mount
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
+    const loadWorks = async () => {
       try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-            // Migration check: if it looks like the old 'Chapter[]' format, convert it
-            if (parsed.length > 0 && !parsed[0].chapters && parsed[0].content) {
-                const migratedWork: Work = {
-                    id: 'default-migrated',
-                    title: 'Untitled Novel',
-                    chapters: parsed as any,
-                    illustrations: [],
-                    lastModified: Date.now()
-                };
-                setWorks([migratedWork]);
-            } else {
-                setWorks(parsed);
-            }
+        const loadedWorks = await storageService.fetchWorks();
+        if (loadedWorks) {
+          setWorks(loadedWorks);
         }
       } catch (e) {
-        console.error("Failed to load saved works", e);
+        console.error("Failed to load works", e);
       }
-    }
+    };
+    loadWorks();
   }, []);
 
-  // Auto-save Works to LocalStorage
+  // Auto-save ACTIVE Work
   useEffect(() => {
-    const handler = setTimeout(() => {
-        if (works.length > 0) {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(works));
-            setLastSaved(new Date());
-        }
-    }, 1000); 
+    if (!activeWork) return;
+
+    const handler = setTimeout(async () => {
+       try {
+         await storageService.saveWork(activeWork);
+         setLastSaved(new Date());
+       } catch (e) {
+         console.error("Auto-save failed", e);
+       }
+    }, 2000); // Debounce save to 2 seconds
 
     return () => clearTimeout(handler);
-  }, [works]);
+  }, [activeWork]);
 
   // --- Library Actions ---
 
-  const handleCreateWork = () => {
+  const handleCreateWork = async () => {
     const newWorkId = Date.now().toString();
     const newWork: Work = {
         id: newWorkId,
@@ -109,8 +101,17 @@ const App: React.FC = () => {
         illustrations: [],
         lastModified: Date.now()
     };
+    
+    // Optimistic update
     setWorks([newWork, ...works]);
-    handleSelectWork(newWorkId);
+    
+    // Save (Service handles server/local)
+    try {
+        await storageService.saveWork(newWork);
+        handleSelectWork(newWorkId);
+    } catch (e) {
+        console.error("Error creating work", e);
+    }
   };
 
   const handleSelectWork = (workId: string) => {
@@ -133,12 +134,20 @@ const App: React.FC = () => {
   };
 
   // Step 2: Confirm Delete (Actual Action)
-  const confirmDeleteWork = () => {
+  const confirmDeleteWork = async () => {
     if (workToDelete) {
+        // Optimistic UI update
         setWorks(prev => prev.filter(w => w.id !== workToDelete));
         if (activeWorkId === workToDelete) {
             setActiveWorkId(null);
         }
+        
+        try {
+            await storageService.deleteWork(workToDelete);
+        } catch (e) {
+            console.error("Delete failed", e);
+        }
+        
         setWorkToDelete(null);
     }
   };
@@ -232,8 +241,6 @@ const App: React.FC = () => {
   // Step 1: Request Delete Chapter
   const handleDeleteChapterRequest = (id: string) => {
     if (!activeWork || activeWork.chapters.length <= 1) {
-        // Just show simple alert or ignore if it's the last chapter
-        // Or could allow deleting last chapter to clear content, but let's stick to simple logic
         return; 
     }
     setChapterToDelete(id);
@@ -308,15 +315,27 @@ const App: React.FC = () => {
     setIsGenerating(true);
     try {
       const base64Image = await generateNovelIllustration(selectedText);
+      
+      // Attempt to save to server to get a persistent file URL
+      let finalImageUrl = base64Image;
+      try {
+        const savedUrl = await storageService.saveImage(base64Image);
+        if (savedUrl) {
+            finalImageUrl = savedUrl;
+        }
+      } catch (saveError) {
+        console.warn("Could not save image to server, using base64 fallback.");
+      }
+
       const newIllustration: Illustration = {
         id: Date.now().toString(),
-        imageUrl: base64Image,
+        imageUrl: finalImageUrl,
         promptSnippet: selectedText,
         timestamp: Date.now(),
       };
       updateWorkIllustrations([newIllustration, ...activeWork.illustrations]);
     } catch (error) {
-      alert("Failed to generate illustration. Please try again.");
+      alert("Failed to generate illustration. Please try again or check your API key quotas.");
     } finally {
       setIsGenerating(false);
     }
@@ -358,7 +377,7 @@ const App: React.FC = () => {
       <ConfirmationModal
         isOpen={!!workToDelete}
         title="Delete Novel"
-        message="Are you sure you want to delete this entire novel? This action cannot be undone and all chapters and illustrations will be lost."
+        message="Are you sure you want to delete this entire novel? The associated folder and files will be removed from your disk."
         confirmLabel="Delete Novel"
         onConfirm={confirmDeleteWork}
         onCancel={() => setWorkToDelete(null)}
