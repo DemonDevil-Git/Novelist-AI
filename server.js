@@ -36,6 +36,23 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // --- Root Route (Health Check) ---
+  if (req.method === 'GET' && pathname === '/') {
+    res.writeHead(200, headers);
+    res.end(JSON.stringify({
+      service: 'Novelist AI Local Server',
+      status: 'Running',
+      message: 'This is the backend API. Please ensure your React frontend is running (usually on port 5173 or 3000) to use the application.',
+      endpoints: [
+        'GET /api/works',
+        'POST /api/works',
+        'DELETE /api/works/:id',
+        'POST /api/save-image'
+      ]
+    }));
+    return;
+  }
+
   // --- Static File Serving for Images ---
   if (req.method === 'GET' && pathname.startsWith('/images/')) {
     const filename = pathname.replace('/images/', '');
