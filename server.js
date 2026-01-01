@@ -1,7 +1,6 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const url = require('url');
 const crypto = require('crypto');
 
 const PORT = 3001;
@@ -24,7 +23,10 @@ const headers = {
 };
 
 const server = http.createServer((req, res) => {
-  const parsedUrl = url.parse(req.url, true);
+  // Use WHATWG URL API to parse the request URL
+  // We construct a full URL using the host header to ensure correct parsing of the path
+  const baseURL = `http://${req.headers.host || 'localhost'}`;
+  const parsedUrl = new URL(req.url, baseURL);
   const pathname = parsedUrl.pathname;
 
   // Handle CORS Preflight
@@ -105,7 +107,6 @@ const server = http.createServer((req, res) => {
         fs.writeFileSync(filepath, buffer);
 
         // Return local server URL
-        // Note: Using localhost implicitly here. 
         const imageUrl = `http://localhost:${PORT}/images/${filename}`;
 
         res.writeHead(200, headers);
