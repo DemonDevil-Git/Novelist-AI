@@ -2,7 +2,7 @@ import { GoogleGenAI } from "@google/genai";
 
 /**
  * Generates an illustration based on a text snippet from a novel.
- * Uses the 'nano banana 2.5' model (gemini-2.5-flash-image).
+ * Uses the 'nano banana pro' model (gemini-3-pro-image-preview).
  */
 export const generateNovelIllustration = async (textSnippet: string): Promise<string> => {
   if (!textSnippet || textSnippet.trim().length === 0) {
@@ -16,7 +16,7 @@ export const generateNovelIllustration = async (textSnippet: string): Promise<st
     const prompt = `Create an artistic, novel-style illustration based on the following text segment: "${textSnippet}". The style should be evocative and suitable for a book illustration.`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image', // Updated to Nano Banana 2.5
+      model: 'gemini-3-pro-image-preview', // Updated to Nano Banana Pro
       contents: {
         parts: [
           {
@@ -27,7 +27,6 @@ export const generateNovelIllustration = async (textSnippet: string): Promise<st
       config: {
         imageConfig: {
           aspectRatio: "4:3", // Standard book illustration ratio
-          // imageSize is not supported by gemini-2.5-flash-image
         },
       },
     });
